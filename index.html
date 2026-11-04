@@ -1,1 +1,275 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polizia Locale Senigallia - Mappa Ordinanze e OSP</title>
 
+  <!-- Font Inter & Icone FontAwesome -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+
+  <!-- Leaflet CSS (Mappa OpenStreetMap senza chiavi API) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+  <!-- Foglio di stile personalizzato -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- BARRA SUPERIORE DI CONTROLLO -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-badge"><i class="fa-solid fa-shield-halved"></i></div>
+      <div>
+        <h1>Polizia Locale Senigallia</h1>
+        <span class="subtitle">Ufficio Verbali • Mappa Ordinanze e OSP</span>
+      </div>
+    </div>
+
+    <!-- Ricerca Via ristretta a Senigallia -->
+    <div class="search-box">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input type="text" id="streetSearch" placeholder="Cerca via o piazza a Senigallia (es. Corso 2 Giugno)..." autocomplete="off" />
+      <button id="btnSearchStreet" title="Cerca sulla mappa">Vai</button>
+      <div id="searchResults" class="search-dropdown hidden"></div>
+    </div>
+
+    <!-- Filtro Temporale / Time Travel per Ricorsi -->
+    <div class="date-filters">
+      <div class="filter-group">
+        <label for="filterFrom">Dal</label>
+        <input type="datetime-local" id="filterFrom" />
+      </div>
+      <div class="filter-group">
+        <label for="filterTo">Al</label>
+        <input type="datetime-local" id="filterTo" />
+      </div>
+      <label class="checkbox-expired" title="Mostra anche ordinanze scadute per verifica ricorsi">
+        <input type="checkbox" id="showExpired" checked />
+        <span>Mostra Scadute</span>
+      </label>
+      <button id="btnResetToday" class="btn-secondary" title="Torna ad oggi">Oggi</button>
+    </div>
+
+    <!-- Azioni e Sincronizzazione -->
+    <div class="actions">
+      <button id="btnRefresh" class="btn-sync" title="Sincronizza con il database centrale">
+        <i class="fa-solid fa-rotate"></i>
+        <span id="syncStatus">Aggiornato</span>
+      </button>
+      <button id="btnOpenModal" class="btn-primary">
+        <i class="fa-solid fa-file-circle-plus"></i> + Carica Ordinanza
+      </button>
+    </div>
+  </header>
+
+  <!-- CONTENITORE PRINCIPALE: SIDEBAR + MAPPA -->
+  <main class="main-layout">
+    
+    <!-- PANNELLO LATERALE LISTA ORDINANZE -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2>Provvedimenti Rilevati (<span id="countOrdinanze">0</span>)</h2>
+        <div class="quick-stats">
+          <span class="stat-pill active-pill"><b id="statVigenti">0</b> Vigenti</span>
+          <span class="stat-pill future-pill"><b id="statFuture">0</b> Future</span>
+          <span class="stat-pill expired-pill"><b id="statScadute">0</b> Scadute</span>
+        </div>
+      </div>
+
+      <!-- Lista schede ordinanze -->
+      <div id="ordinanzeList" class="ordinanze-list">
+        <!-- Popolato dinamicamente da app.js -->
+      </div>
+    </aside>
+
+    <!-- AREA MAPPA INTERATTIVA -->
+    <section class="map-wrapper">
+      <div id="map"></div>
+
+      <!-- Barra Istruzioni Disegno (visibile quando si traccia una via) -->
+      <div id="drawingBanner" class="drawing-banner hidden">
+        <div class="banner-text">
+          <i class="fa-solid fa-route"></i>
+          <span id="drawingStepText">Clicca sulla mappa il <b>PUNTO DI INIZIO</b> della via/area interessata</span>
+        </div>
+        <div class="banner-actions">
+          <button id="btnFinishDrawing" class="btn-success hidden">Conferma Tracciato</button>
+          <button id="btnCancelDrawing" class="btn-danger">Annulla</button>
+        </div>
+      </div>
+
+      <!-- Switch Vista Stradale / Satellitare -->
+      <div class="map-layer-switch">
+        <button id="btnLayerStreet" class="active">Mappa Stradale</button>
+        <button id="btnLayerSat">Satellite</button>
+      </div>
+
+      <!-- Legenda Interattiva Codice Colore -->
+      <div class="map-legend">
+        <h4>Legenda Provvedimenti</h4>
+        <div class="legend-item" data-type="transito">
+          <span class="color-line" style="background:#ef4444;"></span>
+          <span>Divieto di Transito / Chiusura</span>
+        </div>
+        <div class="legend-item" data-type="sosta">
+          <span class="color-line" style="background:#f97316;"></span>
+          <span>Divieto di Sosta con Rimozione</span>
+        </div>
+        <div class="legend-item" data-type="cantiere">
+          <span class="color-line" style="background:#eab308;"></span>
+          <span>Cantiere / Occupazione Suolo (OSP)</span>
+        </div>
+        <div class="legend-item" data-type="manifestazione">
+          <span class="color-line" style="background:#3b82f6;"></span>
+          <span>Manifestazione / Mercato / Evento</span>
+        </div>
+        <div class="legend-item" data-type="scaduta">
+          <span class="color-line dashed" style="background:#64748b;"></span>
+          <span>Ordinanza Scaduta (Storico/Ricorsi)</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- MODALE CARICAMENTO E PARSING AUTOMATICO PDF -->
+  <div id="uploadModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-wand-magic-sparkles"></i> Inserimento Automatico Ordinanza / OSP</h3>
+        <button id="btnCloseModal" class="close-btn">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Drag & Drop PDF / Immagine -->
+        <div id="dropZone" class="drop-zone">
+          <input type="file" id="fileInput" accept=".pdf,image/*,.txt" hidden />
+          <i class="fa-solid fa-file-pdf drop-icon"></i>
+          <p><b>Trascina qui il PDF o la scansione dell'ordinanza</b> oppure <span class="link-text">sfoglia dal PC</span></p>
+          <small id="parseStatus">Il sistema estrarrà da solo numero atto, date, orari, via e tipo di divieto.</small>
+        </div>
+
+        <!-- Alert Conflitto / Sovrapposizione -->
+        <div id="conflictAlert" class="conflict-alert hidden">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+          <div id="conflictText"></div>
+        </div>
+
+        <!-- Form pre-compilato dal Parser -->
+        <form id="ordinanzaForm">
+          <div class="form-grid">
+            <div class="form-field">
+              <label>N° e Anno Ordinanza *</label>
+              <input type="text" id="ordNumero" placeholder="Es. 145/2026" required />
+            </div>
+
+            <div class="form-field">
+              <label>Tipologia Provvedimento (Colore Mappa) *</label>
+              <select id="ordTipo" required>
+                <option value="transito">🔴 Divieto di Transito / Strada Chiusa</option>
+                <option value="sosta" selected>🟠 Divieto di Sosta con Rimozione</option>
+                <option value="cantiere">🟡 Cantiere Stradale / Occupazione Suolo</option>
+                <option value="manifestazione">🔵 Manifestazione / Evento / Area Pedonale</option>
+              </select>
+            </div>
+
+            <div class="form-field">
+              <label>Via o Piazza (Senigallia) *</label>
+              <input type="text" id="ordVia" placeholder="Es. Via Carducci" required />
+            </div>
+
+            <div class="form-field">
+              <label>Tratto / Civici / Intersezione</label>
+              <input type="text" id="ordTratto" placeholder="Es. dal civ. 12 al 38 (lato mare)" />
+            </div>
+
+            <div class="form-field">
+              <label>Data e Ora Inizio Validità *</label>
+              <input type="datetime-local" id="ordInizio" required />
+            </div>
+
+            <div class="form-field">
+              <label>Data e Ora Fine Validità *</label>
+              <input type="datetime-local" id="ordFine" required />
+            </div>
+          </div>
+
+          <div class="form-field full-width">
+            <label>Sintesi Operativa / Deroghe per la Pattuglia</label>
+            <textarea id="ordNote" rows="2" placeholder="Es. Eccetto residenti, mezzi ditta autorizzata targati XX000YY, carico/scarico..."></textarea>
+          </div>
+
+          <!-- Scelta Geometria sulla mappa -->
+          <div class="geo-selector">
+            <div>
+              <strong>Tracciamento Stradale sulla Mappa:</strong>
+              <span id="geoStatusBadge" class="geo-badge">Non ancora tracciato (verrà geocodificato o tracciato con i tasti a destra)</span>
+            </div>
+            <div class="geo-buttons">
+              <button type="button" id="btnStartLineDraw" class="btn-outline">
+                <i class="fa-solid fa-road"></i> Traccia Via (Inizio-Fine)
+              </button>
+              <button type="button" id="btnStartAreaDraw" class="btn-outline">
+                <i class="fa-solid fa-draw-polygon"></i> Disegna Area/Piazza
+              </button>
+            </div>
+          </div>
+
+          <!-- PIN Ufficio Verbali e Salvataggio -->
+          <div class="modal-footer">
+            <div class="pin-box">
+              <label><i class="fa-solid fa-lock"></i> PIN Ufficio:</label>
+              <input type="password" id="officePin" placeholder="Default: 1234" value="1234" />
+            </div>
+            <div class="footer-btns">
+              <button type="button" id="btnConfigCloud" class="btn-secondary" title="Configura Database Condiviso Supabase">
+                <i class="fa-solid fa-cloud"></i> Cloud DB
+              </button>
+              <button type="submit" class="btn-primary">
+                <i class="fa-solid fa-floppy-disk"></i> Salva e Pubblica
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODALE CONFIGURAZIONE SUPABASE (DATABASE CONDIVISO GRATUITO) -->
+  <div id="cloudModal" class="modal-overlay hidden">
+    <div class="modal-card small-modal">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-database"></i> Sincronizzazione Cloud Condivisa</h3>
+        <button id="btnCloseCloud" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="cloud-info">
+          L'app funziona subito salvando i dati nel browser + archivio precaricato. Per sincronizzare in tempo reale tutti i PC dell'ufficio e le pattuglie tramite <b>Supabase (Gratuito)</b>, incolla qui URL e Anon Key del tuo progetto:
+        </p>
+        <div class="form-field">
+          <label>Supabase Project URL</label>
+          <input type="text" id="supaUrl" placeholder="https://xyzcompany.supabase.co" />
+        </div>
+        <div class="form-field" style="margin-top:10px;">
+          <label>Supabase Anon Public Key</label>
+          <input type="text" id="supaKey" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI..." />
+        </div>
+        <div class="modal-footer" style="margin-top:16px;">
+          <button id="btnSaveCloud" class="btn-primary">Connetti Database Realtime</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LIBRERIE ESTERNE (Leaflet, PDF.js, Tesseract OCR, Supabase) -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- Script Principale Applicazione -->
+  <script src="app.js"></script>
+</body>
+</html>
