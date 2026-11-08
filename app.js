@@ -5,7 +5,7 @@ const SENIGALLIA_CENTER = [43.7131, 13.2183];
 const SENIGALLIA_VIEWBOX = "13.1200,43.7700,13.3100,43.6500"; // Bounding Box per Nominatim
 const OFFICE_PIN_DEFAULT = "1234";
 
-// Colori per tipologia provvedimento
+// Colori e tipologie provvedimento
 const TYPE_CONFIG = {
   transito: { label: "Divieto di Transito / Chiusura", color: "#ef4444" },
   sosta: { label: "Divieto di Sosta con Rimozione", color: "#f97316" },
@@ -15,11 +15,50 @@ const TYPE_CONFIG = {
 
 // Configurazione PDF.js worker
 if (window.pdfjsLib) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "[https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js](https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js)";
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 }
 
 // ============================================================================
-// DATI INIZIALI ESEMPIO REALI SU SENIGALLIA (Pronti all'avvio)
+// GESTIONE DATA E ORA LOCALE REALE (CALENDARIO AUTOMATICO)
+// ============================================================================
+function getLocalDateTimeISO(dateObj) {
+  const d = dateObj || new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const minutes = pad(d.getMinutes());
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function setFilterToToday() {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+  document.getElementById("filterFrom").value = getLocalDateTimeISO(startOfDay);
+  document.getElementById("filterTo").value = getLocalDateTimeISO(endOfDay);
+}
+
+function initDefaultFilters() {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+  const nextWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7, 23, 59, 59);
+
+  document.getElementById("filterFrom").value = getLocalDateTimeISO(startOfDay);
+  document.getElementById("filterTo").value = getLocalDateTimeISO(nextWeek);
+}
+
+function getRelativeDate(offsetDays, hours, minutes) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  d.setHours(hours, minutes, 0, 0);
+  return getLocalDateTimeISO(d);
+}
+
+// ============================================================================
+// ORDINANZE DIMOSTRATIVE DI PROVA (SENIGALLIA)
 // ============================================================================
 const INITIAL_ORDINANZE = [
   {
@@ -77,8 +116,8 @@ const INITIAL_ORDINANZE = [
     via: "Via Giosuè Carducci",
     tratto: "Civici 14 - 22",
     inizio: getRelativeDate(-10, 7, 30),
-    fine: getRelativeDate(-3, 18, 0),
-    note: "Occupazione suolo pubblico con ponteggio edile e restringimento carreggiata (Ordinanza storica per verifica verbali).",
+    fine: getRelativeDate(-2, 18, 0),
+    note: "Occupazione suolo pubblico con ponteggio edile (Atto scaduto per test verbali retroattivi).",
     geometryType: "line",
     coords: [
       [43.7172, 13.2194],
@@ -87,16 +126,8 @@ const INITIAL_ORDINANZE = [
   }
 ];
 
-function getRelativeDate(offsetDays, hours, minutes) {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  d.setHours(hours, minutes, 0, 0);
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 // ============================================================================
-// STATO GLOBALE APPLICAZIONE
+// STATO GLOBALE
 // ============================================================================
 let ordinanze = [];
 let map, streetLayer, satLayer, featuresGroup, tempDrawGroup;
@@ -106,7 +137,7 @@ let pendingGeometry = null;
 let supabaseClient = null;
 
 // ============================================================================
-// AVVIO APPLICAZIONE
+// AVVIO
 // ============================================================================
 document.addEventListener("DOMContentLoaded", () => {
   initMap();
@@ -116,7 +147,6 @@ document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
 });
 
-// 1. Inizializzazione Mappa centrata su Senigallia
 function initMap() {
   map = L.map("map", {
     center: SENIGALLIA_CENTER,
@@ -126,10 +156,10 @@ function initMap() {
 
   streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
-    attribution: "© OpenStreetMap contributors • Comune di Senigallia"
+    attribution: "© OpenStreetMap contributors • Senigallia"
   }).addTo(map);
 
-  satLayer = L.tileLayer("[https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/](https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/){z}/{y}/{x}", {
+  satLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
     maxZoom: 19,
     attribution: "© Esri World Imagery"
   });
@@ -137,18 +167,11 @@ function initMap() {
   featuresGroup = L.featureGroup().addTo(map);
   tempDrawGroup = L.featureGroup().addTo(map);
 
-  // Gestione click sulla mappa durante il tracciamento
   map.on("click", onMapClickForDrawing);
 }
 
-// 2. Imposta il filtro temporale di default (intera giornata odierna + prossimi 7 giorni)
-function initDefaultFilters() {
-  document.getElementById("filterFrom").value = getRelativeDate(-7, 0, 0);
-  document.getElementById("filterTo").value = getRelativeDate(7, 23, 59);
-}
-
 // ============================================================================
-// CARICAMENTO E SINCRONIZZAZIONE DATI (LOCALE + SUPABASE REALTIME)
+// CARICAMENTO E SINCRONIZZAZIONE DATI
 // ============================================================================
 function initCloudConnection() {
   const savedUrl = localStorage.getItem("pl_supa_url");
@@ -159,7 +182,6 @@ function initCloudConnection() {
       document.getElementById("supaUrl").value = savedUrl;
       document.getElementById("supaKey").value = savedKey;
 
-      // Sottoscrizione Realtime per aggiornare tutti i colleghi in automatico
       supabaseClient
         .channel("public:ordinanze")
         .on("postgres_changes", { event: "*", schema: "public", table: "ordinanze" }, () => {
@@ -167,7 +189,7 @@ function initCloudConnection() {
         })
         .subscribe();
     } catch (e) {
-      console.warn("Supabase non configurato:", e);
+      console.warn("Supabase connection error:", e);
     }
   }
 }
@@ -186,7 +208,6 @@ async function loadOrdinanze() {
     }
   }
 
-  // Fallback immediato su storage condiviso / dati precaricati
   const stored = localStorage.getItem("pl_senigallia_ordinanze");
   if (stored) {
     ordinanze = JSON.parse(stored);
@@ -205,14 +226,12 @@ function updateSyncBadge(text) {
 }
 
 // ============================================================================
-// MOTORE DI CALCOLO STATO E FILTRO TEMPORALE
+// CALCOLO STATO E RENDERING
 // ============================================================================
 function computeOrdinanzaStatus(ord, filterFromDate, filterToDate) {
   const now = new Date();
   const start = new Date(ord.inizio);
   const end = new Date(ord.fine);
-
-  // Se l'utente sta facendo una verifica storica (Time Travel) usiamo il range selezionato
   const refEnd = filterToDate || now;
 
   if (end < now && end <= refEnd) {
@@ -243,11 +262,9 @@ function renderAll() {
     const start = new Date(ord.inizio);
     const end = new Date(ord.fine);
 
-    // Verifica intersezione con il range di date scelto
     const intersectsRange = start <= toDate && end >= fromDate;
     if (!intersectsRange) return;
 
-    // Filtro per testo via se compilato
     if (searchQuery && !ord.via.toLowerCase().includes(searchQuery) && !(ord.tratto || "").toLowerCase().includes(searchQuery)) {
       return;
     }
@@ -260,7 +277,6 @@ function renderAll() {
     if (status === "scaduta") countScadute++;
     totalShown++;
 
-    // 1. Disegna sulla Mappa
     const cfg = TYPE_CONFIG[ord.tipo] || TYPE_CONFIG.sosta;
     const drawColor = status === "scaduta" ? "#64748b" : cfg.color;
 
@@ -300,7 +316,6 @@ function renderAll() {
     layer.bindPopup(popupHtml);
     featuresGroup.addLayer(layer);
 
-    // 2. Crea Card nella barra laterale
     const card = document.createElement("div");
     card.className = `ord-card type-${ord.tipo} status-${status}`;
     card.innerHTML = `
@@ -353,15 +368,15 @@ function formatDateTimeIT(isoStr) {
 }
 
 // ============================================================================
-// RICERCA VIE RISTRETTA AL COMUNE DI SENIGALLIA
+// RICERCA VIA SENIGALLIA
 // ============================================================================
 async function searchStreetSenigallia(query) {
   if (!query || query.length < 2) return;
   const dropdown = document.getElementById("searchResults");
-  dropdown.innerHTML = `<div class="search-item">Ricerca in corso a Senigallia...</div>`;
+  dropdown.innerHTML = `<div class="search-item">Ricerca a Senigallia in corso...</div>`;
   dropdown.classList.remove("hidden");
 
-  const url = `[https://nominatim.openstreetmap.org/search?format=json&q=$](https://nominatim.openstreetmap.org/search?format=json&q=$){encodeURIComponent(query + ", Senigallia")}&viewbox=${SENIGALLIA_VIEWBOX}&bounded=1&limit=5`;
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query + ", Senigallia")}&viewbox=${SENIGALLIA_VIEWBOX}&bounded=1&limit=5`;
 
   try {
     const res = await fetch(url, { headers: { "Accept-Language": "it" } });
@@ -393,7 +408,7 @@ async function searchStreetSenigallia(query) {
 }
 
 // ============================================================================
-// TRACCIAMENTO STRADALE CON SNAPPING AUTOMATICO (OSRM)
+// TRACCIAMENTO STRADALE E SNAPPING (OSRM)
 // ============================================================================
 function startDrawing(mode) {
   drawingMode = mode;
@@ -406,11 +421,11 @@ function startDrawing(mode) {
 
   if (mode === "line") {
     document.getElementById("drawingStepText").innerHTML =
-      `Clicca sulla mappa il <b>PUNTO DI INIZIO</b> e poi il <b>PUNTO DI FINE</b> della via (il sistema seguirà la strada da solo)`;
+      `Clicca sulla mappa il <b>PUNTO DI INIZIO</b> e poi il <b>PUNTO DI FINE</b> della via (il percorso stradale si aggancerà da solo)`;
     document.getElementById("btnFinishDrawing").classList.add("hidden");
   } else {
     document.getElementById("drawingStepText").innerHTML =
-      `Clicca i vertici intorno alla piazza/area e poi premi <b>Conferma Tracciato</b>`;
+      `Clicca i vertici dell'area/piazza e poi premi <b>Conferma Tracciato</b>`;
     document.getElementById("btnFinishDrawing").classList.remove("hidden");
   }
 }
@@ -423,21 +438,18 @@ async function onMapClickForDrawing(e) {
   L.circleMarker(pt, { radius: 6, color: "#2563eb", fillOpacity: 1 }).addTo(tempDrawGroup);
 
   if (drawingMode === "line" && drawnPoints.length === 2) {
-    // Calcola snapping stradale automatico tra inizio e fine via tramite OSRM gratuito
     const start = drawnPoints[0];
     const end = drawnPoints[1];
     let roadCoords = [start, end];
 
     try {
-      const osrmUrl = `[https://router.project-osrm.org/route/v1/driving/$](https://router.project-osrm.org/route/v1/driving/$){start[1]},${start[0]};${end[1]},${end[0]}?overview=full&geometries=geojson`;
+      const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${start[1]},${start[0]};${end[1]},${end[0]}?overview=full&geometries=geojson`;
       const res = await fetch(osrmUrl);
       const data = await res.json();
       if (data.routes && data.routes[0]) {
         roadCoords = data.routes[0].geometry.coordinates.map((c) => [c[1], c[0]]);
       }
-    } catch (_) {
-      // Fallback linea diretta se offline
-    }
+    } catch (_) {}
 
     pendingGeometry = { type: "line", coords: roadCoords };
     L.polyline(roadCoords, { color: "#2563eb", weight: 6 }).addTo(tempDrawGroup);
@@ -456,12 +468,12 @@ function finishDrawingSession(statusLabel) {
 }
 
 // ============================================================================
-// LETTURA E PARSING AUTOMATICO PDF / SCANSIONI (REGEX POLIZIA LOCALE)
+// PARSING AUTOMATICO ATTI (PDF / OCR)
 // ============================================================================
 async function handleFileUpload(file) {
   if (!file) return;
   const statusEl = document.getElementById("parseStatus");
-  statusEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Lettura automatica del documento in corso...`;
+  statusEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Lettura automatica in corso...`;
 
   let extractedText = "";
 
@@ -475,7 +487,7 @@ async function handleFileUpload(file) {
         extractedText += content.items.map((item) => item.str).join(" ") + "\n";
       }
     } else if (file.type.startsWith("image/") && window.Tesseract) {
-      statusEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Riconoscimento OCR scansione in corso...`;
+      statusEl.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> OCR scansione in corso...`;
       const result = await Tesseract.recognize(file, "ita");
       extractedText = result.data.text;
     } else {
@@ -483,16 +495,15 @@ async function handleFileUpload(file) {
     }
 
     autoFillFormFromText(extractedText, file.name);
-    statusEl.innerHTML = `<b style="color:#15803d;">✅ Dati estratti automaticamente da "${file.name}"! Verifica e salva.</b>`;
+    statusEl.innerHTML = `<b style="color:#15803d;">✅ Dati estratti da "${file.name}"! Verifica e salva.</b>`;
   } catch (err) {
-    statusEl.innerHTML = `<span style="color:#b45309;">File caricato. Completa o verifica i campi sottostanti.</span>`;
+    statusEl.innerHTML = `<span style="color:#b45309;">File caricato. Verifica i campi sottostanti.</span>`;
   }
 }
 
 function autoFillFormFromText(text, filename) {
   const clean = text.replace(/\s+/g, " ");
 
-  // 1. Estrazione Numero Ordinanza (es. Ordinanza n. 145/2026 o N° 320 del...)
   const numMatch =
     clean.match(/ordinanza\s*(?:dirigenziale\s*)?(?:n\.?|num\.?|numero)?\s*(\d{1,5}(?:\/\d{4})?)/i) ||
     filename.match(/(\d{1,4}[\/\-]\d{4})/);
@@ -502,7 +513,6 @@ function autoFillFormFromText(text, filename) {
     document.getElementById("ordNumero").value = rawNum.includes("/") ? rawNum : `${rawNum}/${year}`;
   }
 
-  // 2. Rilevamento automatico Tipologia Divieto
   const lower = clean.toLowerCase();
   if (lower.includes("divieto di transito") || lower.includes("chiusura al transito") || lower.includes("interdizione")) {
     document.getElementById("ordTipo").value = "transito";
@@ -514,13 +524,11 @@ function autoFillFormFromText(text, filename) {
     document.getElementById("ordTipo").value = "sosta";
   }
 
-  // 3. Estrazione Via / Piazza / Corso / Lungomare
   const viaMatch = clean.match(/\b(Via|Corso|Piazza|Viale|Lungomare|Vicolo|Largo|Strada)\s+([A-ZÀ-Ú0-9][a-zà-ú0-9]+(?:\s+[A-ZÀ-Ú0-9a-zà-ú]+){0,3})/);
   if (viaMatch) {
     document.getElementById("ordVia").value = `${viaMatch[1]} ${viaMatch[2].trim()}`;
   }
 
-  // 4. Estrazione Date (formato GG/MM/AAAA o GG-MM-AAAA) e Orari
   const dateRegex = /\b(\d{1,2})[\/\-](\d{1,2})[\/\-](20\d{2})\b/g;
   const datesFound = [...clean.matchAll(dateRegex)];
 
@@ -543,7 +551,6 @@ function autoFillFormFromText(text, filename) {
   checkConflicts();
 }
 
-// Controllo automatico sovrapposizioni/conflitti nella stessa via e date
 function checkConflicts() {
   const via = document.getElementById("ordVia").value.trim().toLowerCase();
   const inizio = document.getElementById("ordInizio").value;
@@ -567,7 +574,7 @@ function checkConflicts() {
 
   if (conflict) {
     document.getElementById("conflictText").innerHTML =
-      `<b>Attenzione Conflitto:</b> Su <b>${conflict.via}</b> è già registrata l'Ordinanza <b>N° ${conflict.numero}</b> negli stessi giorni/orari.`;
+      `<b>Attenzione Conflitto:</b> Su <b>${conflict.via}</b> è già attiva l'Ordinanza <b>N° ${conflict.numero}</b> nello stesso periodo.`;
     alertBox.classList.remove("hidden");
   } else {
     alertBox.classList.add("hidden");
@@ -575,7 +582,7 @@ function checkConflicts() {
 }
 
 // ============================================================================
-// SALVATAGGIO ED ELIMINAZIONE ORDINANZA
+// SALVATAGGIO ED ELIMINAZIONE
 // ============================================================================
 async function saveNewOrdinanza(e) {
   e.preventDefault();
@@ -590,7 +597,6 @@ async function saveNewOrdinanza(e) {
   let coords = pendingGeometry ? pendingGeometry.coords : null;
   let geoType = pendingGeometry ? pendingGeometry.type : "line";
 
-  // Se l'operatore non ha disegnato a mano, geocodifichiamo automaticamente la via a Senigallia
   if (!coords) {
     coords = await autoGeocodeStreet(via);
   }
@@ -626,7 +632,7 @@ async function saveNewOrdinanza(e) {
 
 async function autoGeocodeStreet(viaName) {
   try {
-    const url = `[https://nominatim.openstreetmap.org/search?format=json&q=$](https://nominatim.openstreetmap.org/search?format=json&q=$){encodeURIComponent(viaName + ", Senigallia")}&viewbox=${SENIGALLIA_VIEWBOX}&bounded=1&limit=1`;
+    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(viaName + ", Senigallia")}&viewbox=${SENIGALLIA_VIEWBOX}&bounded=1&limit=1`;
     const res = await fetch(url);
     const data = await res.json();
     if (data && data[0]) {
@@ -661,19 +667,18 @@ async function deleteOrdinanza(id) {
 // EVENT LISTENERS INTERFACCIA
 // ============================================================================
 function bindEvents() {
-  // Filtri data e mostra scadute
   document.getElementById("filterFrom").addEventListener("change", renderAll);
   document.getElementById("filterTo").addEventListener("change", renderAll);
   document.getElementById("showExpired").addEventListener("change", renderAll);
 
+  // Tasto OGGI: imposta giorno corrente reale dalle 00:00 alle 23:59
   document.getElementById("btnResetToday").addEventListener("click", () => {
-    initDefaultFilters();
+    setFilterToToday();
     document.getElementById("streetSearch").value = "";
     map.setView(SENIGALLIA_CENTER, 15);
     renderAll();
   });
 
-  // Ricerca via Senigallia
   const searchInput = document.getElementById("streetSearch");
   searchInput.addEventListener("input", () => {
     renderAll();
@@ -685,7 +690,6 @@ function bindEvents() {
     if (e.key === "Enter") searchStreetSenigallia(searchInput.value);
   });
 
-  // Switch Mappa / Satellite
   document.getElementById("btnLayerStreet").addEventListener("click", (e) => {
     map.removeLayer(satLayer);
     streetLayer.addTo(map);
@@ -699,10 +703,8 @@ function bindEvents() {
     document.getElementById("btnLayerStreet").classList.remove("active");
   });
 
-  // Refresh manuale
   document.getElementById("btnRefresh").addEventListener("click", loadOrdinanze);
 
-  // Apertura/Chiusura Modale Caricamento
   document.getElementById("btnOpenModal").addEventListener("click", () => {
     document.getElementById("ordInizio").value = getRelativeDate(0, 8, 0);
     document.getElementById("ordFine").value = getRelativeDate(1, 19, 0);
@@ -712,7 +714,6 @@ function bindEvents() {
     document.getElementById("uploadModal").classList.add("hidden");
   });
 
-  // Drag & Drop File PDF / Scansione
   const dropZone = document.getElementById("dropZone");
   const fileInput = document.getElementById("fileInput");
   dropZone.addEventListener("click", () => fileInput.click());
@@ -730,12 +731,10 @@ function bindEvents() {
     if (e.dataTransfer.files.length) handleFileUpload(e.dataTransfer.files[0]);
   });
 
-  // Controllo conflitti live
   ["ordVia", "ordInizio", "ordFine"].forEach((id) => {
     document.getElementById(id).addEventListener("input", checkConflicts);
   });
 
-  // Bottoni Tracciamento Geometria
   document.getElementById("btnStartLineDraw").addEventListener("click", () => startDrawing("line"));
   document.getElementById("btnStartAreaDraw").addEventListener("click", () => startDrawing("polygon"));
   document.getElementById("btnFinishDrawing").addEventListener("click", () => {
@@ -751,10 +750,8 @@ function bindEvents() {
     document.getElementById("uploadModal").classList.remove("hidden");
   });
 
-  // Form Submit
   document.getElementById("ordinanzaForm").addEventListener("submit", saveNewOrdinanza);
 
-  // Modale Cloud Supabase
   document.getElementById("btnConfigCloud").addEventListener("click", () => {
     document.getElementById("cloudModal").classList.remove("hidden");
   });
